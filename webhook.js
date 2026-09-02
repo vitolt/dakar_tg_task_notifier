@@ -41,11 +41,14 @@ async function checkStageChanges() {
 
     if (data.result && data.result.items) {
       const items = data.result.items;
+      console.log(`🔍 Checking ${items.length} items...`);
 
       for (const item of items) {
         const itemId = item.id;
         const currentStage = item.stageId;
         const previousStage = trackedItems.get(itemId);
+
+        console.log(`   Item ${itemId}: ${previousStage || 'NEW'} → ${currentStage}`);
 
         // Если элемент перешёл в целевую стадию
         if (currentStage === process.env.TARGET_STAGE_ID && previousStage !== currentStage) {
