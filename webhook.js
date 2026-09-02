@@ -34,7 +34,7 @@ async function sendTelegramMessage(itemId, title, assignedBy, stageId) {
 // Polling: проверка смены стадии элементов смарт-процесса
 async function checkStageChanges() {
   try {
-    const url = `${process.env.BITRIX_WEBHOOK_URL}crm.item.list?entityTypeId=${process.env.ENTITY_TYPE_ID}&filter[assignedById]=${process.env.TARGET_BITRIX_USER_ID}&order[ID]=DESC&select[]=id&select[]=title&select[]=stageId&select[]=assignedById`;
+    const url = `${process.env.BITRIX_WEBHOOK_URL}crm.item.list?entityTypeId=${process.env.ENTITY_TYPE_ID}&order[ID]=DESC&select[]=id&select[]=title&select[]=stageId&select[]=assignedById`;
 
     const response = await fetch(url);
     const data = await response.json();
@@ -74,7 +74,7 @@ setInterval(checkStageChanges, 60000);
 // Первая проверка сразу при старте (инициализация trackedItems)
 (async () => {
   try {
-    const url = `${process.env.BITRIX_WEBHOOK_URL}crm.item.list?entityTypeId=${process.env.ENTITY_TYPE_ID}&filter[assignedById]=${process.env.TARGET_BITRIX_USER_ID}&order[ID]=DESC&select[]=id&select[]=stageId`;
+    const url = `${process.env.BITRIX_WEBHOOK_URL}crm.item.list?entityTypeId=${process.env.ENTITY_TYPE_ID}&order[ID]=DESC&select[]=id&select[]=stageId`;
     const response = await fetch(url);
     const data = await response.json();
 
