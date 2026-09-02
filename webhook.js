@@ -5,13 +5,13 @@ const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// Хранилище последнего проверенного ID задачи
-let lastCheckedTaskId = 0;
+// Хранилище отслеживаемых элементов {id: stageId}
+const trackedItems = new Map();
 
 // Функция отправки в Telegram
-async function sendTelegramMessage(taskId, title, createdByName, responsibleId) {
-  const taskUrl = `${process.env.PORTAL_URL}/company/personal/user/${responsibleId}/tasks/task/view/${taskId}/`;
-  const text = `📋 Новая задача: ${title}\n👤 Постановщик: ${createdByName}\n🔗 ${taskUrl}`;
+async function sendTelegramMessage(itemId, title, assignedBy, stageId) {
+  const itemUrl = `${process.env.PORTAL_URL}/crm/type/${process.env.ENTITY_TYPE_ID}/details/${itemId}/`;
+  const text = `✅ Элемент перешёл в целевую стадию\n📋 ${title}\n👤 Ответственный: ${assignedBy}\n🔗 ${itemUrl}`;
 
   try {
     const response = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
@@ -24,43 +24,43 @@ async function sendTelegramMessage(taskId, title, createdByName, responsibleId) 
       const err = await response.text();
       console.error('Telegram error:', err);
     } else {
-      console.log(`✅ Sent notification for task ${taskId}`);
+      console.log(`✅ Sent notification for item ${itemId} (stage: ${stageId})`);
     }
   } catch (e) {
     console.error('Fetch error:', e.message);
   }
 }
 
-// Polling: проверка новых задач каждую минуту
-async function checkNewTasks() {
+// Polling: проверка смены стадии элементов смарт-процесса
+async function checkStageChanges() {
   try {
-    const url = `${process.env.BITRIX_WEBHOOK_URL}tasks.task.list?filter[RESPONSIBLE_ID]=${process.env.TARGET_BITRIX_USER_ID}&order[ID]=DESC&select[]=ID&select[]=TITLE&select[]=CREATED_BY_NAME&select[]=RESPONSIBLE_ID`;
+    const url = `${process.env.BITRIX_WEBHOOK_URL}crm.item.list?entityTypeId=${process.env.ENTITY_TYPE_ID}&filter[assignedById]=${process.env.TARGET_BITRIX_USER_ID}&order[ID]=DESC&select[]=id&select[]=title&select[]=stageId&select[]=assignedById`;
 
     const response = await fetch(url);
     const data = await response.json();
 
-    if (data.result && data.result.tasks) {
-      const tasks = data.result.tasks;
+    if (data.result && data.result.items) {
+      const items = data.result.items;
 
-      for (const task of tasks) {
-        const taskId = parseInt(task.id);
+      for (const item of items) {
+        const itemId = item.id;
+        const currentStage = item.stageId;
+        const previousStage = trackedItems.get(itemId);
 
-        // Пропускаем уже обработанные задачи
-        if (taskId <= lastCheckedTaskId) break;
+        // Если элемент перешёл в целевую стадию
+        if (currentStage === process.env.TARGET_STAGE_ID && previousStage !== currentStage) {
+          console.log(`🎯 Stage change detected: item ${itemId} → ${currentStage}`);
 
-        console.log(`📌 New task found: ${taskId} - ${task.title}`);
+          await sendTelegramMessage(
+            itemId,
+            item.title || 'Без названия',
+            item.assignedById || 'Неизвестно',
+            currentStage
+          );
+        }
 
-        await sendTelegramMessage(
-          taskId,
-          task.title,
-          task.createdByName || 'Неизвестно',
-          task.responsibleId
-        );
-      }
-
-      // Обновляем последний проверенный ID
-      if (tasks.length > 0) {
-        lastCheckedTaskId = Math.max(lastCheckedTaskId, parseInt(tasks[0].id));
+        // Обновляем состояние элемента
+        trackedItems.set(itemId, currentStage);
       }
     }
   } catch (e) {
@@ -69,26 +69,31 @@ async function checkNewTasks() {
 }
 
 // Запуск polling каждые 60 секунд
-setInterval(checkNewTasks, 60000);
+setInterval(checkStageChanges, 60000);
 
-// Первая проверка сразу при старте (инициализация lastCheckedTaskId)
+// Первая проверка сразу при старте (инициализация trackedItems)
 (async () => {
   try {
-    const url = `${process.env.BITRIX_WEBHOOK_URL}tasks.task.list?filter[RESPONSIBLE_ID]=${process.env.TARGET_BITRIX_USER_ID}&order[ID]=DESC&select[]=ID`;
+    const url = `${process.env.BITRIX_WEBHOOK_URL}crm.item.list?entityTypeId=${process.env.ENTITY_TYPE_ID}&filter[assignedById]=${process.env.TARGET_BITRIX_USER_ID}&order[ID]=DESC&select[]=id&select[]=stageId`;
     const response = await fetch(url);
     const data = await response.json();
 
-    if (data.result && data.result.tasks && data.result.tasks.length > 0) {
-      lastCheckedTaskId = parseInt(data.result.tasks[0].id);
-      console.log(`🔄 Initialized with last task ID: ${lastCheckedTaskId}`);
+    if (data.result && data.result.items) {
+      data.result.items.forEach(item => {
+        trackedItems.set(item.id, item.stageId);
+      });
+      console.log(`🔄 Initialized tracking for ${trackedItems.size} items`);
     }
   } catch (e) {
     console.error('Init error:', e.message);
   }
+
+  // Запускаем первую проверку сразу
+  checkStageChanges();
 })();
 
 // Healthcheck endpoint
 app.get('/', (req, res) => res.send('OK'));
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Polling service listening on port ${port}`));
+app.listen(port, () => console.log(`Polling smart process stages on port ${port}`));
