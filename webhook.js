@@ -11,7 +11,7 @@ const trackedItems = new Map();
 // Функция отправки в Telegram
 async function sendTelegramMessage(itemId, title, assignedBy, stageId) {
   const itemUrl = `${process.env.PORTAL_URL}/crm/type/${process.env.ENTITY_TYPE_ID}/details/${itemId}/`;
-  const text = `✅ Элемент перешёл в целевую стадию\n📋 ${title}\n👤 Ответственный: ${assignedBy}\n🔗 ${itemUrl}`;
+  const text = `✅ Задача переведена в тестирование\n📋 ${title}\n🔗 ${itemUrl}`;
 
   try {
     const response = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
