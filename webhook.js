@@ -71,8 +71,8 @@ async function checkStageChanges() {
   }
 }
 
-// Запуск polling каждые 60 секунд
-setInterval(checkStageChanges, 60000);
+// Запуск polling каждые 30 минут
+setInterval(checkStageChanges, 30 * 60 * 1000);
 
 // Первая проверка сразу при старте (инициализация trackedItems)
 (async () => {
