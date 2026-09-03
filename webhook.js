@@ -103,7 +103,7 @@ setInterval(pollTelegramUpdates, 2000);
 
 async function sendTelegramMessage(itemId, title, assignedBy, stageId) {
   const itemUrl = `${process.env.PORTAL_URL}/crm/type/${process.env.ENTITY_TYPE_ID}/details/${itemId}/`;
-  const text = `✅ Элемент перешёл в целевую стадию\n📋 ${title}\n👤 Ответственный: ${assignedBy}\n🔗 ${itemUrl}`;
+  const text = `✅ Задача отправлена на тестирование\n📋 ${title}\n🔗 ${itemUrl}`;
 
   const subscribers = loadSubscribers();
   console.log(`📤 Sending to ${subscribers.length} subscribers...`);
