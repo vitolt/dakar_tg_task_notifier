@@ -1,5 +1,11 @@
 import express from 'express';
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SUBSCRIBERS_FILE = path.join(__dirname, 'subscribers.json');
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -8,30 +14,122 @@ app.use(express.json());
 // Хранилище отслеживаемых элементов {id: stageId}
 const trackedItems = new Map();
 
-// Функция отправки в Telegram
-async function sendTelegramMessage(itemId, title, assignedBy, stageId) {
-  const itemUrl = `${process.env.PORTAL_URL}/crm/type/${process.env.ENTITY_TYPE_ID}/details/${itemId}/`;
-  const text = `✅ Задача переведена в тестирование\n📋 ${title}\n🔗 ${itemUrl}`;
+// --- Управление подписчиками ---
 
+function loadSubscribers() {
   try {
-    const response = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text }),
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      console.error('Telegram error:', err);
-    } else {
-      console.log(`✅ Sent notification for item ${itemId} (stage: ${stageId})`);
+    if (fs.existsSync(SUBSCRIBERS_FILE)) {
+      return JSON.parse(fs.readFileSync(SUBSCRIBERS_FILE, 'utf8'));
     }
   } catch (e) {
-    console.error('Fetch error:', e.message);
+    console.error('Error reading subscribers:', e.message);
+  }
+  return [];
+}
+
+function saveSubscribers(list) {
+  try {
+    fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify(list), 'utf8');
+  } catch (e) {
+    console.error('Error saving subscribers:', e.message);
   }
 }
 
-// Polling: проверка смены стадии элементов смарт-процесса
+function addSubscriber(chatId) {
+  const list = loadSubscribers();
+  if (!list.includes(chatId)) {
+    list.push(chatId);
+    saveSubscribers(list);
+    console.log(`➕ Subscriber added: ${chatId}`);
+  }
+}
+
+function removeSubscriber(chatId) {
+  const list = loadSubscribers().filter(id => id !== chatId);
+  saveSubscribers(list);
+  console.log(`➖ Subscriber removed: ${chatId}`);
+}
+
+// Инициализация: добавляем дефолтного подписчика из .env
+if (process.env.TELEGRAM_CHAT_ID) {
+  addSubscriber(Number(process.env.TELEGRAM_CHAT_ID));
+}
+
+// --- Telegram long polling ---
+
+let telegramOffset = 0;
+
+async function pollTelegramUpdates() {
+  try {
+    const response = await fetch(
+      `https://api.telegram.org/bot${process.env.BOT_TOKEN}/getUpdates?offset=${telegramOffset}&timeout=1`
+    );
+    const data = await response.json();
+
+    if (data.result && data.result.length > 0) {
+      for (const update of data.result) {
+        telegramOffset = update.update_id + 1;
+        const msg = update.message;
+        if (!msg) continue;
+
+        const chatId = msg.chat.id;
+        const text = msg.text || '';
+
+        if (text.startsWith('/start')) {
+          addSubscriber(chatId);
+          await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: '✅ Вы подписаны на уведомления. Для отписки отправьте /stop' }),
+          });
+        } else if (text.startsWith('/stop')) {
+          removeSubscriber(chatId);
+          await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: '🔕 Вы отписаны от уведомлений.' }),
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Telegram polling error:', e.message);
+  }
+}
+
+setInterval(pollTelegramUpdates, 2000);
+
+// --- Отправка уведомлений ---
+
+async function sendTelegramMessage(itemId, title, assignedBy, stageId) {
+  const itemUrl = `${process.env.PORTAL_URL}/crm/type/${process.env.ENTITY_TYPE_ID}/details/${itemId}/`;
+  const text = `✅ Элемент перешёл в целевую стадию\n📋 ${title}\n👤 Ответственный: ${assignedBy}\n🔗 ${itemUrl}`;
+
+  const subscribers = loadSubscribers();
+  console.log(`📤 Sending to ${subscribers.length} subscribers...`);
+
+  for (const chatId of subscribers) {
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text }),
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        console.error(`Telegram error for ${chatId}:`, err);
+      } else {
+        console.log(`✅ Sent to ${chatId} for item ${itemId}`);
+      }
+    } catch (e) {
+      console.error(`Fetch error for ${chatId}:`, e.message);
+    }
+  }
+}
+
+// --- Polling смарт-процесса ---
+
 async function checkStageChanges() {
   try {
     const url = `${process.env.BITRIX_WEBHOOK_URL}crm.item.list?entityTypeId=${process.env.ENTITY_TYPE_ID}&order[ID]=DESC&select[]=id&select[]=title&select[]=stageId&select[]=assignedById`;
@@ -50,7 +148,6 @@ async function checkStageChanges() {
 
         console.log(`   Item ${itemId}: ${previousStage || 'NEW'} → ${currentStage}`);
 
-        // Если элемент перешёл в целевую стадию
         if (currentStage === process.env.TARGET_STAGE_ID && previousStage !== currentStage) {
           console.log(`🎯 Stage change detected: item ${itemId} → ${currentStage}`);
 
@@ -62,7 +159,6 @@ async function checkStageChanges() {
           );
         }
 
-        // Обновляем состояние элемента
         trackedItems.set(itemId, currentStage);
       }
     }
@@ -71,10 +167,8 @@ async function checkStageChanges() {
   }
 }
 
-// Запуск polling каждые 30 минут
-setInterval(checkStageChanges, 10 * 60 * 1000);
+setInterval(checkStageChanges, 60000);
 
-// Первая проверка сразу при старте (инициализация trackedItems)
 (async () => {
   try {
     const url = `${process.env.BITRIX_WEBHOOK_URL}crm.item.list?entityTypeId=${process.env.ENTITY_TYPE_ID}&order[ID]=DESC&select[]=id&select[]=stageId`;
@@ -91,7 +185,6 @@ setInterval(checkStageChanges, 10 * 60 * 1000);
     console.error('Init error:', e.message);
   }
 
-  // Запускаем первую проверку сразу
   checkStageChanges();
 })();
 
